@@ -73,6 +73,17 @@ function copyFiles(from: string, to: string): string[] {
 }
 
 copyFiles(join(here, 'dashboard'), join(out, 'dashboard'));
+// The dashboard's text must fit the gate's cap: check before the dossier is built,
+// so an over-size dashboard fails here with the file named, not inside the dossier.
+let dashboardBytes = 0;
+for (const name of readdirSync(join(here, 'dashboard'))) {
+  const path = join(here, 'dashboard', name);
+  if (statSync(path).isFile()) dashboardBytes += statSync(path).size;
+}
+if (dashboardBytes > TEXT_MAX_BYTES) {
+  process.stderr.write(`token radar: dashboard/ holds ${dashboardBytes} bytes of text: keep it at most ${TEXT_MAX_BYTES} bytes\n`);
+  process.exit(1);
+}
 const shots = copyFiles(join(here, 'screenshots'), join(out, 'screenshots'));
 if (shots.length < 3) {
   process.stderr.write(`token radar: screenshots/ holds ${shots.length} image${shots.length === 1 ? '' : 's'}: hand in 3, the board, a detail view and a filtered view\n`);
