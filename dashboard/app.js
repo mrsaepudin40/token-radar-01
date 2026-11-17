@@ -479,6 +479,8 @@
       shell.appendChild(top10Chart());
       shell.appendChild(moversPanel());
       shell.appendChild(chainPanel());
+      shell.appendChild(categoryDivePanel());
+      shell.appendChild(riskPanel());
       shell.appendChild(compsTable());
       shell.appendChild(modelPanel());
     }
@@ -581,6 +583,108 @@
         )
       ),
       el('p', { class: 'chain-note', text: 'The top 3 chains hold ' + breakdown.top3_share_pct.toFixed(1) + '% of the board\'s implied value across ' + list.length + ' chains.' })
+    );
+  }
+
+  // Category Deep Dive: every category on the board, strongest first, from window.RADAR.categories.
+  // Each row shows the category's share of the board, its mean multiple and its momentum; the
+  // leading category's five strongest protocols open the same detail drawer as the board.
+  function categoryDivePanel() {
+    var dive = DATA.categories || { categories: [], total_implied_value_usd: 0, top3_share_pct: 0, hottest_category: null, hottest_momentum_pct: null, coldest_category: null, coldest_momentum_pct: null };
+    var list = dive.categories || [];
+    var max = list.length ? Math.max.apply(null, list.map(function (c) { return c.total_implied_value_usd; })) : 1;
+    var total = dive.total_implied_value_usd || totalImplied();
+    var tbody = el('tbody');
+    list.forEach(function (c) {
+      var hasMomentum = c.momentum_pct !== null && c.momentum_pct !== undefined;
+      var momentum = hasMomentum ? fmtPct(c.momentum_pct) : 'n/a';
+      var momentumClass = !hasMomentum ? '' : c.momentum_pct >= 0 ? 'pos' : 'neg';
+      tbody.appendChild(el('tr', null,
+        el('td', null, el('b', { text: c.category })),
+        el('td', { class: 'num', text: String(c.protocols) }),
+        el('td', null, el('div', { class: 'implied' },
+          el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((c.total_implied_value_usd / max) * 100)) + '%' })),
+          el('span', { class: 'num', text: fmtUsd(c.total_implied_value_usd) })
+        )),
+        el('td', { class: 'num', text: c.share_pct.toFixed(1) + '%' }),
+        el('td', { class: 'num', text: 'x' + c.avg_multiple.toFixed(4) }),
+        el('td', { class: 'num ' + momentumClass, text: momentum }),
+        el('td', null, el('span', { class: 'sub', text: c.top_protocol + ' · ' + fmtUsd(c.top_implied_value_usd) }))
+      ));
+    });
+    var leader = list[0] || null;
+    var hotNote = dive.hottest_category
+      ? 'Hottest: ' + dive.hottest_category + ' at ' + fmtPct(dive.hottest_momentum_pct) + '; coldest: ' + dive.coldest_category + ' at ' + fmtPct(dive.coldest_momentum_pct) + '. '
+      : '';
+    return el('section', { class: 'panel' },
+      el('h2', { text: 'Category deep dive' }),
+      el('p', { class: 'sub', text: 'Where the board\'s ' + fmtUsd(total) + ' of implied value sits, by category. The average multiple is the mean of the category\'s protocols\' category multiples; the top 3 categories hold ' + dive.top3_share_pct.toFixed(1) + '% of the board. ' + hotNote + 'Momentum is the mean of the clamped seven-day change across the category\'s protocols; a category with no recorded week has no momentum, not a flat one.' }),
+      el('div', { class: 'table-wrap' },
+        el('table', null,
+          el('thead', null, el('tr', null,
+            el('th', { scope: 'col', text: 'Category' }),
+            el('th', { scope: 'col', text: 'Protocols' }),
+            el('th', { scope: 'col', text: 'Implied value' }),
+            el('th', { scope: 'col', text: 'Share' }),
+            el('th', { scope: 'col', text: 'Avg multiple' }),
+            el('th', { scope: 'col', text: 'Momentum 7d' }),
+            el('th', { scope: 'col', text: 'Largest protocol' })
+          )),
+          tbody
+        )
+      ),
+      leader ? el('div', { class: 'dive-leader' },
+        el('h3', { text: 'Top 5 in ' + leader.category + ' — the board\'s largest category' }),
+        leader.top.map(function (p) {
+          return el('button', { type: 'button', class: 'mover', onclick: function () { openDetail(p.slug); } },
+            el('span', { class: 'mover-rank num', text: '#' + p.rank }),
+            el('span', { class: 'mover-name' },
+              el('b', { text: p.name }),
+              el('span', { class: 'sub', text: fmtUsd(p.tvl_usd) + ' TVL' })
+            ),
+            el('span', { class: 'mover-change num ' + (p.change_7d === null ? '' : p.change_7d >= 0 ? 'pos' : 'neg'), text: fmtPct(p.change_7d) }),
+            el('span', { class: 'mover-value num', text: fmtUsd(p.implied_value_usd) })
+          );
+        })
+      ) : null
+    );
+  }
+
+  // Risk & Concentration: how much of the board rides on a few names, from window.RADAR.risk.
+  // The HHI sums the squared percentage shares of every protocol, so a board carried by one
+  // name reads high and a board split evenly reads near zero. The label is a read, not a rank.
+  function riskPanel() {
+    var risk = DATA.risk || { hhi: 0, hhi_band: 'low', top1_share_pct: 0, top5_share_pct: 0, top10_share_pct: 0, top_protocol: '', top_implied_value_usd: 0, top_category: '', top_category_share_pct: 0, thresholds: [], above_one_pct: 0, risk_score: 0, risk_label: 'diversified' };
+    var bandText = risk.hhi_band === 'high' ? 'high — one or a few names carry the board' : risk.hhi_band === 'moderate' ? 'moderate — value is spread, with a heavy top' : 'low — value is spread across many names';
+    var scoreText = risk.risk_label === 'concentrated' ? 'concentrated' : risk.risk_label === 'watch' ? 'watch' : 'diversified';
+    var tbody = el('tbody');
+    (risk.thresholds || []).forEach(function (t) {
+      tbody.appendChild(el('tr', null,
+        el('td', { class: 'num', text: 'at least ' + fmtUsd(t.threshold_usd) }),
+        el('td', { class: 'num', text: String(t.protocols) }),
+        el('td', { class: 'num', text: t.share_pct.toFixed(1) + '%' })
+      ));
+    });
+    return el('section', { class: 'panel' },
+      el('h2', { text: 'Risk & concentration' }),
+      el('p', { class: 'sub', text: 'The board\'s ' + fmtUsd(totalImplied()) + ' of implied value is not spread evenly: ' + risk.top_protocol + ' alone carries ' + risk.top1_share_pct.toFixed(1) + '% of it, and the top 10 carry ' + risk.top10_share_pct.toFixed(1) + '%. The largest category, ' + risk.top_category + ', holds ' + risk.top_category_share_pct.toFixed(1) + '%. Concentration is a property of the board, not a flaw in a protocol — but a launch that depends on one name is a different bet from one spread across many.' }),
+      el('div', { class: 'facts risk-facts' },
+        el('div', { class: 'fact' }, el('span', { text: 'Concentration (HHI)' }), el('b', { text: String(risk.hhi) }), el('span', { class: 'sub', text: bandText })),
+        el('div', { class: 'fact' }, el('span', { text: 'Top 10 share' }), el('b', { text: risk.top10_share_pct.toFixed(1) + '%' }), el('span', { class: 'sub', text: 'Top 5 hold ' + risk.top5_share_pct.toFixed(1) + '%' })),
+        el('div', { class: 'fact' }, el('span', { text: 'Largest category' }), el('b', { text: risk.top_category }), el('span', { class: 'sub', text: risk.top_category_share_pct.toFixed(1) + '% of the board' })),
+        el('div', { class: 'fact' }, el('span', { text: 'Risk score' }), el('b', { text: String(risk.risk_score) + ' / 100' }), el('span', { class: 'sub', text: scoreText + ' · ' + risk.above_one_pct + ' protocols above 1% each' }))
+      ),
+      el('div', { class: 'table-wrap' },
+        el('table', null,
+          el('thead', null, el('tr', null,
+            el('th', { scope: 'col', text: 'Implied value at least' }),
+            el('th', { scope: 'col', text: 'Protocols' }),
+            el('th', { scope: 'col', text: 'Share of board' })
+          )),
+          tbody
+        )
+      ),
+      el('p', { class: 'risk-note', text: 'Risk score blends the HHI with the top-10 share and the largest category\'s share: below 30 reads diversified, below 55 reads watch, 55 and up reads concentrated. ' + risk.above_one_pct + ' protocols each carry at least 1% of the board\'s implied value.' })
     );
   }
 

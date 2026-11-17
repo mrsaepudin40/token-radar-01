@@ -745,3 +745,231 @@ export function chainBreakdown(board: BoardRow[]): ChainBreakdownData {
 export function dataScriptExtended(radar: RadarData, movers: MoversData, chains: ChainBreakdownData): string {
   return `window.RADAR=${JSON.stringify({ ...radar, movers, chains })};\n`;
 }
+
+/** How many protocols each category's deep dive lists. */
+export const CATEGORY_DIVE_TOP = 5;
+
+/** One protocol inside a category's deep dive: its rank, its week and its implied value. */
+export interface CategoryDiveProtocol {
+  rank: number;
+  slug: string;
+  name: string;
+  implied_value_usd: number;
+  change_7d: number | null;
+  tvl_usd: number;
+}
+
+/** One category's deep dive: its strongest protocols and what the category is worth. */
+export interface CategoryDiveRow {
+  category: string;
+  protocols: number;
+  total_implied_value_usd: number;
+  /** This category's share of the board's total implied value, in per cent. */
+  share_pct: number;
+  /** The mean of the category's protocols' category multiples. */
+  avg_multiple: number;
+  /** The category's mean clamped seven-day change, or null when no protocol records one. */
+  momentum_pct: number | null;
+  /** Of the category's protocols with a recorded week, how many rose. */
+  risers: number;
+  /** Of the category's protocols with a recorded week, how many fell. */
+  fallers: number;
+  /** The category's five strongest protocols by implied value. */
+  top: CategoryDiveProtocol[];
+  /** The category's largest protocol by implied value. */
+  top_protocol: string;
+  top_implied_value_usd: number;
+}
+
+/** The Category Deep Dive panel: every category on the board, strongest first. */
+export interface CategoryDiveData {
+  categories: CategoryDiveRow[];
+  total_implied_value_usd: number;
+  /** The share of the board's implied value the top three categories hold together. */
+  top3_share_pct: number;
+  /** The category with the hottest mean week, or null when no week is recorded anywhere. */
+  hottest_category: string | null;
+  hottest_momentum_pct: number | null;
+  /** The category with the coldest mean week, or null when no week is recorded anywhere. */
+  coldest_category: string | null;
+  coldest_momentum_pct: number | null;
+}
+
+/**
+ * A deep dive per category: the five strongest protocols, the category's share of the board,
+ * its mean multiple and its momentum — the mean of the same clamped change_7d the model
+ * scores with, so a hot category here and a hot week in the board agree. A category whose
+ * protocols record no week has no momentum, not a flat one: an unknown week is not a flat
+ * week. Categories with no name on record group under 'Other', the same label the dashboard
+ * shows for them. Nothing here changes a rank: the dive only reads the board.
+ */
+export function categoryDeepDive(board: BoardRow[], model: ModelConstants = MODEL, limit: number = CATEGORY_DIVE_TOP): CategoryDiveData {
+  const byCategory = new Map<string, { rows: BoardRow[]; total: number; multiples: number; momentumSum: number; momentumCount: number; risers: number; fallers: number }>();
+  let total = 0;
+  for (const r of board) {
+    const category = r.category ?? 'Other';
+    total += r.implied_value_usd;
+    const agg = byCategory.get(category) ?? { rows: [], total: 0, multiples: 0, momentumSum: 0, momentumCount: 0, risers: 0, fallers: 0 };
+    agg.rows.push(r);
+    agg.total += r.implied_value_usd;
+    agg.multiples += r.model.category_multiple;
+    if (r.change_7d !== null) {
+      const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, r.change_7d));
+      agg.momentumSum += growthPct;
+      agg.momentumCount += 1;
+      if (growthPct > 0) agg.risers += 1;
+      else if (growthPct < 0) agg.fallers += 1;
+    }
+    byCategory.set(category, agg);
+  }
+  const categories: CategoryDiveRow[] = [...byCategory.entries()]
+    .map(([category, agg]) => {
+      const top = [...agg.rows]
+        .sort((a, b) => b.implied_value_usd - a.implied_value_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
+        .slice(0, limit);
+      const leader = top[0]!;
+      return {
+        category,
+        protocols: agg.rows.length,
+        total_implied_value_usd: agg.total,
+        share_pct: total > 0 ? Math.round((agg.total / total) * 10000) / 100 : 0,
+        avg_multiple: round4(agg.multiples / agg.rows.length),
+        momentum_pct: agg.momentumCount > 0 ? Math.round((agg.momentumSum / agg.momentumCount) * 100) / 100 : null,
+        risers: agg.risers,
+        fallers: agg.fallers,
+        top: top.map((r) => ({
+          rank: r.rank,
+          slug: r.slug,
+          name: r.name,
+          implied_value_usd: r.implied_value_usd,
+          change_7d: r.change_7d,
+          tvl_usd: r.tvl_usd,
+        })),
+        top_protocol: leader.name,
+        top_implied_value_usd: leader.implied_value_usd,
+      };
+    })
+    .sort((a, b) => b.total_implied_value_usd - a.total_implied_value_usd || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
+  const top3 = categories.slice(0, 3).reduce((s, c) => s + c.total_implied_value_usd, 0);
+  const withMomentum = categories.filter((c): c is CategoryDiveRow & { momentum_pct: number } => c.momentum_pct !== null);
+  const hottest = withMomentum.reduce<CategoryDiveRow | null>((best, c) => (best === null || c.momentum_pct > best.momentum_pct! ? c : best), null);
+  const coldest = withMomentum.reduce<CategoryDiveRow | null>((worst, c) => (worst === null || c.momentum_pct < worst.momentum_pct! ? c : worst), null);
+  return {
+    categories,
+    total_implied_value_usd: total,
+    top3_share_pct: total > 0 ? Math.round((top3 / total) * 10000) / 100 : 0,
+    hottest_category: hottest === null ? null : hottest.category,
+    hottest_momentum_pct: hottest === null ? null : hottest.momentum_pct,
+    coldest_category: coldest === null ? null : coldest.category,
+    coldest_momentum_pct: coldest === null ? null : coldest.momentum_pct,
+  };
+}
+
+/** The implied-value bars the Risk panel counts protocols above. */
+export const RISK_THRESHOLDS = [100_000_000, 10_000_000, 1_000_000];
+
+/** One concentration threshold: how many protocols clear an implied-value bar. */
+export interface RiskThresholdRow {
+  threshold_usd: number;
+  protocols: number;
+  /** The protocols above the bar, together, as a share of the board's implied value. */
+  share_pct: number;
+}
+
+/** The Risk & Concentration panel: how much of the board rides on a few names. */
+export interface RiskData {
+  /** Herfindahl-Hirschman index over implied-value shares, 0..10000. */
+  hhi: number;
+  /** The HHI read in the antitrust bands: low below 1500, moderate to 2500, high above. */
+  hhi_band: 'low' | 'moderate' | 'high';
+  top1_share_pct: number;
+  top5_share_pct: number;
+  top10_share_pct: number;
+  top_protocol: string;
+  top_implied_value_usd: number;
+  /** The largest category by implied value, and its share of the board. */
+  top_category: string;
+  top_category_share_pct: number;
+  /** Protocols above each implied-value threshold, with their combined share. */
+  thresholds: RiskThresholdRow[];
+  /** Protocols carrying at least 1% of the board's implied value each. */
+  above_one_pct: number;
+  /** A 0..100 score: higher means the board's value rides on fewer names. */
+  risk_score: number;
+  /** The score read plainly: diversified below 30, watch below 55, concentrated at 55 and up. */
+  risk_label: 'diversified' | 'watch' | 'concentrated';
+}
+
+/**
+ * How concentrated the board is. The Herfindahl-Hirschman index sums the squared percentage
+ * shares of every protocol's implied value, so a board split evenly across many names reads
+ * near zero and a board carried by one name reads near 10000. The score blends the HHI with
+ * the top-10 share and the largest category's share, so no single measure decides the
+ * verdict: a board can be top-heavy by name, by category, or by both, and the label says
+ * which way it leans. An empty board reads zero everywhere, never an error. Nothing here
+ * changes a rank: concentration is a property of the board, not a flaw in a protocol.
+ */
+export function riskConcentration(board: BoardRow[]): RiskData {
+  const empty: RiskData = {
+    hhi: 0,
+    hhi_band: 'low',
+    top1_share_pct: 0,
+    top5_share_pct: 0,
+    top10_share_pct: 0,
+    top_protocol: '',
+    top_implied_value_usd: 0,
+    top_category: '',
+    top_category_share_pct: 0,
+    thresholds: RISK_THRESHOLDS.map((threshold) => ({ threshold_usd: threshold, protocols: 0, share_pct: 0 })),
+    above_one_pct: 0,
+    risk_score: 0,
+    risk_label: 'diversified',
+  };
+  if (board.length === 0) return empty;
+  const total = board.reduce((s, r) => s + r.implied_value_usd, 0);
+  const pct = (value: number): number => (total > 0 ? Math.round((value / total) * 10000) / 100 : 0);
+  const hhi = total > 0
+    ? Math.round(board.reduce((s, r) => s + ((r.implied_value_usd / total) * 100) ** 2, 0))
+    : 0;
+  const sorted = [...board].sort((a, b) => b.implied_value_usd - a.implied_value_usd);
+  const shareOf = (n: number): number => pct(sorted.slice(0, n).reduce((s, r) => s + r.implied_value_usd, 0));
+  const leader = sorted[0]!;
+  const byCategory = new Map<string, number>();
+  for (const r of board) {
+    const category = r.category ?? 'Other';
+    byCategory.set(category, (byCategory.get(category) ?? 0) + r.implied_value_usd);
+  }
+  const topCategory = [...byCategory.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))[0]!;
+  const thresholds: RiskThresholdRow[] = RISK_THRESHOLDS.map((threshold) => {
+    const above = board.filter((r) => r.implied_value_usd >= threshold);
+    return {
+      threshold_usd: threshold,
+      protocols: above.length,
+      share_pct: pct(above.reduce((s, r) => s + r.implied_value_usd, 0)),
+    };
+  });
+  const aboveOnePct = board.filter((r) => total > 0 && r.implied_value_usd / total >= 0.01).length;
+  const top10Share = shareOf(10);
+  const topCategoryShare = pct(topCategory[1]);
+  const riskScore = Math.round((hhi / 100) * 0.4 + top10Share * 0.3 + topCategoryShare * 0.3);
+  return {
+    hhi,
+    hhi_band: hhi < 1500 ? 'low' : hhi <= 2500 ? 'moderate' : 'high',
+    top1_share_pct: shareOf(1),
+    top5_share_pct: shareOf(5),
+    top10_share_pct: top10Share,
+    top_protocol: leader.name,
+    top_implied_value_usd: leader.implied_value_usd,
+    top_category: topCategory[0],
+    top_category_share_pct: topCategoryShare,
+    thresholds,
+    above_one_pct: aboveOnePct,
+    risk_score: riskScore,
+    risk_label: riskScore < 30 ? 'diversified' : riskScore < 55 ? 'watch' : 'concentrated',
+  };
+}
+
+/** A compact data.js that also carries the Category Deep Dive and the Risk panel. */
+export function dataScriptFull(radar: RadarData, movers: MoversData, chains: ChainBreakdownData, categories: CategoryDiveData, risk: RiskData): string {
+  return `window.RADAR=${JSON.stringify({ ...radar, movers, chains, categories, risk })};\n`;
+}

@@ -187,3 +187,21 @@ dialog.detail::backdrop { background: rgba(0, 0, 0, .65); }
   .mover { grid-template-columns: 36px 1fr auto; }
   .mover-value { display: none; }
 }
+
+/* Category Deep Dive panel: the leading category's five strongest protocols. */
+.dive-leader { margin-top: 14px; border-top: 1px solid var(--line-soft); padding-top: 12px; }
+.dive-leader h3 {
+  margin: 0 0 10px; font-size: 13px; color: var(--dim);
+  text-transform: uppercase; letter-spacing: .05em;
+}
+
+/* Risk & Concentration panel: four stat cards and the threshold table. */
+.risk-facts { grid-template-columns: repeat(4, 1fr); }
+.risk-facts .fact b { font-size: 17px; }
+.risk-facts .fact .sub { display: block; margin-top: 4px; }
+.risk-note { color: var(--dim); font-size: 13px; margin-top: 10px; margin-bottom: 0; }
+
+/* Narrow screens: two stat cards per row, and the dive table scrolls sideways. */
+@media (max-width: 720px) {
+  .risk-facts { grid-template-columns: 1fr 1fr; }
+}
