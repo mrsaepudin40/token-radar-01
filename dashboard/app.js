@@ -477,6 +477,8 @@
     shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());
     if (state.tab === 'pre-token') {
       shell.appendChild(top10Chart());
+      shell.appendChild(moversPanel());
+      shell.appendChild(chainPanel());
       shell.appendChild(compsTable());
       shell.appendChild(modelPanel());
     }
@@ -484,6 +486,102 @@
     app.setAttribute('aria-busy', 'false');
     if (!dialog.isConnected) app.appendChild(dialog);
     if (state.selected) openDetail(state.selected);
+  }
+
+  // Top Movers: the board's steepest seven-day rises and falls, from window.RADAR.movers.
+  // Each row opens the same detail drawer as the board, so a mover's rank can be checked
+  // against its model instead of trusted from the momentum alone.
+  function moverRow(m, up) {
+    var cls = up ? 'pos' : 'neg';
+    var arrow = up ? '▲ ' : '▼ ';
+    return el('button', { type: 'button', class: 'mover', onclick: function () { openDetail(m.slug); } },
+      el('span', { class: 'mover-rank num', text: '#' + m.rank }),
+      el('span', { class: 'mover-name' },
+        el('b', { text: m.name }),
+        el('span', { class: 'sub', text: (m.category || 'Other') + ' · ' + fmtUsd(m.tvl_usd) + ' TVL' })
+      ),
+      el('span', { class: 'mover-change num ' + cls, text: arrow + fmtPct(m.growth_pct) }),
+      el('span', { class: 'mover-value num', text: fmtUsd(m.implied_value_usd) })
+    );
+  }
+
+  function moversPanel() {
+    var movers = DATA.movers || { gainers: [], losers: [], recorded: 0, risers: 0, fallers: 0, flat: 0, unrecorded: 0 };
+    var gainers = movers.gainers || [];
+    var losers = movers.losers || [];
+    var summary = 'Of ' + movers.recorded + ' rows with a recorded week, ' + movers.risers + ' rose, ' + movers.fallers + ' fell and ' + movers.flat + ' were flat' +
+      (movers.unrecorded ? '; ' + movers.unrecorded + ' have no seven-day change on record and are left out.' : '.');
+    return el('section', { class: 'panel' },
+      el('h2', { text: 'Top movers — seven days' }),
+      el('p', { class: 'sub', text: 'The board\'s steepest seven-day rises and falls, by the same clamped change_7d the model scores. Momentum is a signal, not a price: a hot week lifts implied value, it does not promise a token. Select a mover to see why it ranks where it does.' }),
+      el('p', { class: 'movers-note', text: summary }),
+      el('div', { class: 'movers-grid' },
+        el('div', { class: 'movers-col' },
+          el('h3', { text: 'Rising — top ' + gainers.length }),
+          gainers.length ? gainers.map(function (m) { return moverRow(m, true); }) : el('p', { class: 'sub', text: 'No risers with a recorded seven-day change.' })
+        ),
+        el('div', { class: 'movers-col' },
+          el('h3', { text: 'Falling — top ' + losers.length }),
+          losers.length ? losers.map(function (m) { return moverRow(m, false); }) : el('p', { class: 'sub', text: 'No fallers with a recorded seven-day change.' })
+        )
+      )
+    );
+  }
+
+  // Chain Breakdown: where the board's implied value sits, from window.RADAR.chains.
+  // Each protocol counts toward the chain it names first, so the shares add to 100%.
+  // The table sorts by implied value, by protocol count, or by average multiple.
+  var chainSort = 'implied';
+  function chainSortButton(key, label) {
+    return el('button', { type: 'button', 'aria-pressed': chainSort === key ? 'true' : 'false', text: label, onclick: function () { chainSort = key; render(); } });
+  }
+
+  function chainPanel() {
+    var breakdown = DATA.chains || { chains: [], total_implied_value_usd: 0, top3_share_pct: 0 };
+    var list = (breakdown.chains || []).slice();
+    if (chainSort === 'protocols') list.sort(function (a, b) { return b.protocols - a.protocols || b.total_implied_value_usd - a.total_implied_value_usd; });
+    else if (chainSort === 'multiple') list.sort(function (a, b) { return b.avg_multiple - a.avg_multiple || b.total_implied_value_usd - a.total_implied_value_usd; });
+    else list.sort(function (a, b) { return b.total_implied_value_usd - a.total_implied_value_usd || (a.chain < b.chain ? -1 : a.chain > b.chain ? 1 : 0); });
+    var max = list.length ? Math.max.apply(null, list.map(function (c) { return c.total_implied_value_usd; })) : 1;
+    var total = breakdown.total_implied_value_usd || totalImplied();
+    var tbody = el('tbody');
+    list.forEach(function (c) {
+      tbody.appendChild(el('tr', null,
+        el('td', null, el('b', { text: c.chain })),
+        el('td', { class: 'num', text: String(c.protocols) }),
+        el('td', null, el('div', { class: 'implied' },
+          el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((c.total_implied_value_usd / max) * 100)) + '%' })),
+          el('span', { class: 'num', text: fmtUsd(c.total_implied_value_usd) })
+        )),
+        el('td', { class: 'num', text: c.share_pct.toFixed(1) + '%' }),
+        el('td', { class: 'num', text: 'x' + c.avg_multiple.toFixed(4) }),
+        el('td', null, el('span', { class: 'sub', text: c.top_protocol + ' · ' + fmtUsd(c.top_implied_value_usd) }))
+      ));
+    });
+    return el('section', { class: 'panel' },
+      el('h2', { text: 'Chain breakdown' }),
+      el('p', { class: 'sub', text: 'Where the board\'s ' + fmtUsd(total) + ' of implied value sits, by each protocol\'s first chain. The average multiple is the mean of the chain\'s protocols\' category multiples, so a chain of high-multiple categories reads higher than a chain of low-multiple ones.' }),
+      el('div', { class: 'sort-row' },
+        el('span', { class: 'sub', text: 'Sort by' }),
+        chainSortButton('implied', 'Implied value'),
+        chainSortButton('protocols', 'Protocols'),
+        chainSortButton('multiple', 'Avg multiple')
+      ),
+      el('div', { class: 'table-wrap' },
+        el('table', null,
+          el('thead', null, el('tr', null,
+            el('th', { scope: 'col', text: 'Chain' }),
+            el('th', { scope: 'col', text: 'Protocols' }),
+            el('th', { scope: 'col', text: 'Implied value' }),
+            el('th', { scope: 'col', text: 'Share' }),
+            el('th', { scope: 'col', text: 'Avg multiple' }),
+            el('th', { scope: 'col', text: 'Largest protocol' })
+          )),
+          tbody
+        )
+      ),
+      el('p', { class: 'chain-note', text: 'The top 3 chains hold ' + breakdown.top3_share_pct.toFixed(1) + '% of the board\'s implied value across ' + list.length + ' chains.' })
+    );
   }
 
   readHash();

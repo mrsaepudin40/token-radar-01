@@ -19,7 +19,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { boardIssue, buildRadar, dataScript, parseSnapshot } from './lib/model.ts';
+import { boardIssue, buildRadar, chainBreakdown, dataScript, dataScriptExtended, parseSnapshot, topMovers } from './lib/model.ts';
 import { buildDossier } from './vendor/makefun-board.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -47,6 +47,8 @@ const out = arg('output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
 
 const snapshot = parseSnapshot(readFileSync(inputFile, 'utf8'));
 const { board, radar } = buildRadar(snapshot);
+const movers = topMovers(board);
+const chains = chainBreakdown(board);
 const issue = boardIssue(board, snapshot);
 if (issue !== null) {
   process.stderr.write(`token radar: the model wrote a board the gate refuses: ${issue}\n`);
@@ -56,6 +58,9 @@ if (issue !== null) {
 mkdirSync(out, { recursive: true });
 writeFileSync(join(out, 'board.json'), `${JSON.stringify({ rows: board })}\n`);
 writeFileSync(join(out, 'data.js'), dataScript(radar));
+// The dashboard's Top Movers and Chain Breakdown panels read the same board from data.js:
+// rewrite it with the movers and the chain table merged in, so one file still carries the page.
+writeFileSync(join(out, 'data.js'), dataScriptExtended(radar, movers, chains));
 
 /** Copy one directory's regular files into `to`, skipping names that start with a dot. */
 function copyFiles(from: string, to: string): string[] {
@@ -115,4 +120,14 @@ writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEX
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (3 files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
+);
+
+// The movers and the chain table, for the console as well as the dashboard: the week's momentum
+// and where the board's implied value sits, without opening the page.
+const topGainer = movers.gainers[0];
+const topLoser = movers.losers[0];
+const topChain = chains.chains[0];
+process.stdout.write(
+  `token radar: movers ${movers.recorded} recorded (${movers.risers} up, ${movers.fallers} down, ${movers.flat} flat, ${movers.unrecorded} unrecorded) — top gainer ${topGainer ? `${topGainer.name} ${topGainer.growth_pct}%` : 'none'}, steepest faller ${topLoser ? `${topLoser.name} ${topLoser.growth_pct}%` : 'none'}\n` +
+    `token radar: chains ${chains.chains.length} — top ${topChain ? `${topChain.chain}: ${topChain.protocols} protocols, $${topChain.total_implied_value_usd.toLocaleString('en-US')} implied (${topChain.share_pct}% of board)` : 'none'}; top 3 chains hold ${chains.top3_share_pct}%\n`,
 );

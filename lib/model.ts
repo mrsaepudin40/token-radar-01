@@ -598,3 +598,150 @@ export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null
 export function dataScript(radar: RadarData): string {
   return `window.RADAR=${JSON.stringify(radar)};\n`;
 }
+
+/** How many movers each side of the Top Movers panel carries. */
+export const TOP_MOVERS = 15;
+
+/** One row of the Top Movers panel: a board protocol's seven-day move and its implied value. */
+export interface MoverRow {
+  rank: number;
+  slug: string;
+  name: string;
+  category: string | null;
+  change_7d: number;
+  /** The seven-day change clamped to the model's growth window, the same clamp impliedValue uses. */
+  growth_pct: number;
+  tvl_usd: number;
+  implied_value_usd: number;
+}
+
+/** The Top Movers panel's two lists, plus how the whole board moved. */
+export interface MoversData {
+  gainers: MoverRow[];
+  losers: MoverRow[];
+  /** Board rows with a recorded seven-day change. */
+  recorded: number;
+  /** Of the recorded rows, how many rose, fell, or were flat. */
+  risers: number;
+  fallers: number;
+  flat: number;
+  /** Board rows with no seven-day change on record, so no momentum to rank. */
+  unrecorded: number;
+}
+
+/**
+ * The board's momentum, both ways: the steepest seven-day risers and the steepest fallers.
+ * Momentum is the same clamped change_7d the model scores with (MODEL.growth_floor to
+ * MODEL.growth_cap), so a mover's rank here and its growth multiplier in the board agree.
+ * Rows with no change_7d on record are left out of both lists and counted as unrecorded:
+ * an unknown week is not a flat week. Ties break toward the larger implied value, then slug.
+ */
+export function topMovers(board: BoardRow[], model: ModelConstants = MODEL, limit: number = TOP_MOVERS): MoversData {
+  const scored: MoverRow[] = [];
+  let risers = 0;
+  let fallers = 0;
+  let flat = 0;
+  let unrecorded = 0;
+  for (const r of board) {
+    if (r.change_7d === null) {
+      unrecorded += 1;
+      continue;
+    }
+    const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, r.change_7d));
+    if (growthPct > 0) risers += 1;
+    else if (growthPct < 0) fallers += 1;
+    else flat += 1;
+    scored.push({
+      rank: r.rank,
+      slug: r.slug,
+      name: r.name,
+      category: r.category,
+      change_7d: r.change_7d,
+      growth_pct: growthPct,
+      tvl_usd: r.tvl_usd,
+      implied_value_usd: r.implied_value_usd,
+    });
+  }
+  const byRise = (a: MoverRow, b: MoverRow): number =>
+    b.growth_pct - a.growth_pct || b.implied_value_usd - a.implied_value_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0);
+  const byFall = (a: MoverRow, b: MoverRow): number =>
+    a.growth_pct - b.growth_pct || b.implied_value_usd - a.implied_value_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0);
+  return {
+    gainers: [...scored].sort(byRise).slice(0, limit),
+    losers: [...scored].sort(byFall).slice(0, limit),
+    recorded: scored.length,
+    risers,
+    fallers,
+    flat,
+    unrecorded,
+  };
+}
+
+/** One row of the Chain Breakdown panel: a chain's share of the board. */
+export interface ChainRow {
+  chain: string;
+  protocols: number;
+  total_implied_value_usd: number;
+  /** This chain's share of the board's total implied value, in per cent. */
+  share_pct: number;
+  /** The mean of the category multiples of the chain's protocols. */
+  avg_multiple: number;
+  /** The chain's largest protocol by implied value. */
+  top_protocol: string;
+  top_implied_value_usd: number;
+}
+
+/** The Chain Breakdown panel: every chain on the board, strongest first. */
+export interface ChainBreakdownData {
+  chains: ChainRow[];
+  total_implied_value_usd: number;
+  /** The share of the board's implied value the top three chains hold together. */
+  top3_share_pct: number;
+}
+
+/**
+ * Where the board's implied value sits, by chain. Each protocol counts toward the first chain it
+ * names, so the shares add to 100% and no dollar is counted twice: a multi-chain protocol is
+ * attributed to its primary chain, not split across all of them. Chains with no board protocol
+ * do not appear. The average multiple is the mean of the chain's protocols' category multiples,
+ * so a chain of high-multiple categories reads higher than a chain of low-multiple ones.
+ */
+export function chainBreakdown(board: BoardRow[]): ChainBreakdownData {
+  const byChain = new Map<string, { count: number; total: number; multiples: number; top: string; topImplied: number }>();
+  let total = 0;
+  for (const r of board) {
+    const chain = r.chains.length > 0 ? r.chains[0]! : 'Unknown';
+    total += r.implied_value_usd;
+    const agg = byChain.get(chain) ?? { count: 0, total: 0, multiples: 0, top: '', topImplied: 0 };
+    agg.count += 1;
+    agg.total += r.implied_value_usd;
+    agg.multiples += r.model.category_multiple;
+    if (r.implied_value_usd > agg.topImplied) {
+      agg.top = r.name;
+      agg.topImplied = r.implied_value_usd;
+    }
+    byChain.set(chain, agg);
+  }
+  const chains: ChainRow[] = [...byChain.entries()]
+    .map(([chain, agg]) => ({
+      chain,
+      protocols: agg.count,
+      total_implied_value_usd: agg.total,
+      share_pct: total > 0 ? Math.round((agg.total / total) * 10000) / 100 : 0,
+      avg_multiple: round4(agg.multiples / agg.count),
+      top_protocol: agg.top,
+      top_implied_value_usd: agg.topImplied,
+    }))
+    .sort((a, b) => b.total_implied_value_usd - a.total_implied_value_usd || (a.chain < b.chain ? -1 : a.chain > b.chain ? 1 : 0));
+  const top3 = chains.slice(0, 3).reduce((s, c) => s + c.total_implied_value_usd, 0);
+  return {
+    chains,
+    total_implied_value_usd: total,
+    top3_share_pct: total > 0 ? Math.round((top3 / total) * 10000) / 100 : 0,
+  };
+}
+
+/** A compact data.js that also carries the Top Movers and Chain Breakdown panels. */
+export function dataScriptExtended(radar: RadarData, movers: MoversData, chains: ChainBreakdownData): string {
+  return `window.RADAR=${JSON.stringify({ ...radar, movers, chains })};\n`;
+}

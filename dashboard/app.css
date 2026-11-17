@@ -145,3 +145,45 @@ dialog.detail::backdrop { background: rgba(0, 0, 0, .65); }
   .factor .verdict { grid-column: 2; justify-self: start; }
   .count { margin-left: 0; }
 }
+
+/* Top Movers panel: two columns of clickable momentum rows. */
+.movers-note { color: var(--dim); font-size: 13px; margin-top: -4px; }
+.movers-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.movers-col h3 {
+  margin: 0 0 10px; font-size: 13px; color: var(--dim);
+  text-transform: uppercase; letter-spacing: .05em;
+}
+.mover {
+  display: grid; grid-template-columns: 44px 1fr auto auto; gap: 10px; align-items: center;
+  width: 100%; background: var(--bg); border: 1px solid var(--line-soft); border-radius: 8px;
+  padding: 8px 10px; margin-bottom: 6px; color: var(--ink); font: inherit;
+  text-align: left; cursor: pointer;
+}
+.mover:last-child { margin-bottom: 0; }
+.mover:hover { border-color: var(--green-dim); background: var(--panel-2); }
+.mover:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+.mover-rank { color: var(--faint); font-size: 13px; text-align: right; }
+.mover-name { min-width: 0; }
+.mover-name b {
+  display: block; font-weight: 600; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.mover-name .sub { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mover-change { font-weight: 650; white-space: nowrap; }
+.mover-value { color: var(--dim); font-size: 13px; white-space: nowrap; }
+
+/* Chain Breakdown panel: shares of the board by first chain. */
+.chain-note { color: var(--dim); font-size: 13px; margin-top: 10px; margin-bottom: 0; }
+.sort-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.sort-row button {
+  background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 8px; padding: 7px 12px; font: inherit; font-size: 13px; cursor: pointer;
+}
+.sort-row button[aria-pressed="true"] { background: var(--green); border-color: var(--green); color: #06110b; font-weight: 650; }
+
+/* Narrow screens: stack the mover columns and drop the implied-value column. */
+@media (max-width: 720px) {
+  .movers-grid { grid-template-columns: 1fr; }
+  .mover { grid-template-columns: 36px 1fr auto; }
+  .mover-value { display: none; }
+}

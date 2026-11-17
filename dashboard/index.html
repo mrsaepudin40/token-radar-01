@@ -8,7 +8,11 @@
 </head>
 <body>
 <a class="skip" href="#board">Skip to the board</a>
-<main id="board" tabindex="-1" aria-busy="true"></main>
+<main id="board" tabindex="-1" aria-busy="true">
+<!-- The board, the Top Movers panel and the Chain Breakdown panel are rendered here by
+     dashboard/app.js from the window.RADAR data in data.js. No server, no fetch. -->
+<noscript><p>This dashboard needs JavaScript: it renders the ranked board from the data beside it.</p></noscript>
+</main>
 <script src="../data.js"></script>
 <script src="app.js"></script>
 </body>
