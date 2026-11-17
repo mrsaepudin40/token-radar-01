@@ -973,3 +973,217 @@ export function riskConcentration(board: BoardRow[]): RiskData {
 export function dataScriptFull(radar: RadarData, movers: MoversData, chains: ChainBreakdownData, categories: CategoryDiveData, risk: RiskData): string {
   return `window.RADAR=${JSON.stringify({ ...radar, movers, chains, categories, risk })};\n`;
 }
+
+/** The four TVL tiers the board's protocols bucket into, by the snapshot's own TVL. */
+export const TVL_TIER_EDGES: { label: string; min_tvl_usd: number; max_tvl_usd: number | null }[] = [
+  { label: 'Under $1M', min_tvl_usd: 0, max_tvl_usd: 1_000_000 },
+  { label: '$1M–$10M', min_tvl_usd: 1_000_000, max_tvl_usd: 10_000_000 },
+  { label: '$10M–$100M', min_tvl_usd: 10_000_000, max_tvl_usd: 100_000_000 },
+  { label: 'Over $100M', min_tvl_usd: 100_000_000, max_tvl_usd: null },
+];
+
+/** One protocol inside a TVL tier's top three: its rank, its name and its implied value. */
+export interface TvlTierTop {
+  rank: number;
+  slug: string;
+  name: string;
+  implied_value_usd: number;
+}
+
+/** One TVL tier: how many of the board's protocols sit in it and what they are worth together. */
+export interface TvlTierRow {
+  label: string;
+  min_tvl_usd: number;
+  /** The tier's TVL ceiling, or null for the open-ended top tier. */
+  max_tvl_usd: number | null;
+  protocols: number;
+  total_implied_value_usd: number;
+  /** This tier's share of the board's total implied value, in per cent. */
+  share_pct: number;
+  /** The mean of the category multiples of the tier's protocols. */
+  avg_multiple: number;
+  /** The tier's largest protocol by implied value. */
+  top_protocol: string;
+  top_implied_value_usd: number;
+  /** The tier's three strongest protocols by implied value. */
+  top3: TvlTierTop[];
+}
+
+/** The TVL Tiers panel: every tier, smallest TVL first, plus the tier that carries the board. */
+export interface TvlTiersData {
+  tiers: TvlTierRow[];
+  total_implied_value_usd: number;
+  /** The tier holding the most implied value, and its share of the board. */
+  largest_tier: string;
+  largest_tier_share_pct: number;
+  /** The tier holding the most protocols, and how many it holds. */
+  densest_tier: string;
+  densest_tier_protocols: number;
+}
+
+/** Which TVL tier a protocol's TVL falls in: the first edge whose ceiling it sits under. */
+export function tvlTierFor(tvlUsd: number): { label: string; min_tvl_usd: number; max_tvl_usd: number | null } {
+  for (const edge of TVL_TIER_EDGES) {
+    if (edge.max_tvl_usd === null || tvlUsd < edge.max_tvl_usd) return edge;
+  }
+  return TVL_TIER_EDGES[TVL_TIER_EDGES.length - 1]!;
+}
+
+/**
+ * Where the board's implied value sits, by protocol size. Each protocol counts toward exactly
+ * one tier — the first whose ceiling its TVL sits under — so the shares add to 100% and no
+ * dollar is counted twice. The average multiple is the mean of the tier's protocols' category
+ * multiples, so a tier of high-multiple categories reads higher than a tier of low-multiple
+ * ones. An empty tier still appears with zeros, so the panel always shows all four tiers.
+ * Nothing here changes a rank: a tier is a property of the board, not a score.
+ */
+export function tvlTiers(board: BoardRow[]): TvlTiersData {
+  const byTier = new Map<string, { rows: BoardRow[]; total: number; multiples: number }>();
+  for (const edge of TVL_TIER_EDGES) byTier.set(edge.label, { rows: [], total: 0, multiples: 0 });
+  let total = 0;
+  for (const r of board) {
+    const tier = tvlTierFor(r.tvl_usd);
+    total += r.implied_value_usd;
+    const agg = byTier.get(tier.label)!;
+    agg.rows.push(r);
+    agg.total += r.implied_value_usd;
+    agg.multiples += r.model.category_multiple;
+  }
+  const tiers: TvlTierRow[] = TVL_TIER_EDGES.map((edge) => {
+    const agg = byTier.get(edge.label)!;
+    const top = [...agg.rows]
+      .sort((a, b) => b.implied_value_usd - a.implied_value_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
+      .slice(0, 3);
+    const leader = top[0];
+    return {
+      label: edge.label,
+      min_tvl_usd: edge.min_tvl_usd,
+      max_tvl_usd: edge.max_tvl_usd,
+      protocols: agg.rows.length,
+      total_implied_value_usd: agg.total,
+      share_pct: total > 0 ? Math.round((agg.total / total) * 10000) / 100 : 0,
+      avg_multiple: agg.rows.length > 0 ? round4(agg.multiples / agg.rows.length) : 0,
+      top_protocol: leader === undefined ? '' : leader.name,
+      top_implied_value_usd: leader === undefined ? 0 : leader.implied_value_usd,
+      top3: top.map((r) => ({ rank: r.rank, slug: r.slug, name: r.name, implied_value_usd: r.implied_value_usd })),
+    };
+  });
+  const largest = [...tiers].sort((a, b) => b.total_implied_value_usd - a.total_implied_value_usd)[0]!;
+  const densest = [...tiers].sort((a, b) => b.protocols - a.protocols || b.total_implied_value_usd - a.total_implied_value_usd)[0]!;
+  return {
+    tiers,
+    total_implied_value_usd: total,
+    largest_tier: largest.label,
+    largest_tier_share_pct: largest.share_pct,
+    densest_tier: densest.label,
+    densest_tier_protocols: densest.protocols,
+  };
+}
+
+/** The clamped seven-day rise a "hot" alert needs, in per cent. */
+export const ALERT_HOT_GROWTH_PCT = 50;
+/** The implied value a "hot" alert needs, in dollars. */
+export const ALERT_HOT_MIN_IMPLIED_USD = 10_000_000;
+/** The category share that marks every protocol in it as concentration-flagged, in per cent. */
+export const ALERT_CONCENTRATED_SHARE_PCT = 40;
+/** The implied value a "large but unranked" alert needs, in dollars. */
+export const ALERT_LARGE_MIN_IMPLIED_USD = 50_000_000;
+/** The rank a "large but unranked" alert must sit below. */
+export const ALERT_LARGE_TOP_RANK = 20;
+
+/** One watchlist alert: a protocol, the condition it trips, and the reason in plain words. */
+export interface WatchAlert {
+  kind: 'hot' | 'concentrated' | 'large-unranked';
+  kind_label: string;
+  rank: number;
+  slug: string;
+  name: string;
+  category: string | null;
+  implied_value_usd: number;
+  reason: string;
+}
+
+/** The Watchlist & Alerts panel: every flagged protocol, largest implied value first. */
+export interface WatchlistAlertsData {
+  alerts: WatchAlert[];
+  /** Alerts for steep momentum with real size behind it. */
+  hot: number;
+  /** Alerts for protocols sitting in a category that carries the board. */
+  concentrated: number;
+  /** Alerts for large protocols sitting outside the top 20. */
+  large_unranked: number;
+}
+
+/**
+ * The protocols worth watching, and why. Three conditions, each read off the board the model
+ * already scored — no new ranking, no new multiple. A protocol trips "hot" when its clamped
+ * seven-day change is at least +50% and its implied value is at least $10M: momentum this
+ * steep with size behind it is the shape a launch rumour takes. It trips "concentrated"
+ * when its category holds at least 40% of the board's implied value: a launch there rides
+ * one category's fortunes. It trips "large but unranked" when it carries at least $50M of
+ * implied value from outside the top 20: a big name the board's headline rows do not show.
+ * One protocol can trip more than one condition and carries one alert per condition, so the
+ * count of alerts is the count of flags, not of protocols. The list is sorted by implied
+ * value, largest first, so the biggest flag reads first.
+ */
+export function watchlistAlerts(board: BoardRow[], categories: CategoryDiveData, model: ModelConstants = MODEL): WatchlistAlertsData {
+  const shareByCategory = new Map<string, number>();
+  for (const c of categories.categories) shareByCategory.set(c.category, c.share_pct);
+  const alerts: WatchAlert[] = [];
+  let hot = 0;
+  let concentrated = 0;
+  let largeUnranked = 0;
+  for (const r of board) {
+    const category = r.category ?? 'Other';
+    const categoryShare = shareByCategory.get(category) ?? 0;
+    if (r.change_7d !== null) {
+      const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, r.change_7d));
+      if (growthPct >= ALERT_HOT_GROWTH_PCT && r.implied_value_usd >= ALERT_HOT_MIN_IMPLIED_USD) {
+        hot += 1;
+        alerts.push({
+          kind: 'hot',
+          kind_label: 'Hot momentum',
+          rank: r.rank,
+          slug: r.slug,
+          name: r.name,
+          category: r.category,
+          implied_value_usd: r.implied_value_usd,
+          reason: `Clamped seven-day change +${growthPct}% with $${r.implied_value_usd.toLocaleString('en-US')} implied: a rise this steep with size behind it is the shape a launch rumour takes.`,
+        });
+      }
+    }
+    if (categoryShare >= ALERT_CONCENTRATED_SHARE_PCT) {
+      concentrated += 1;
+      alerts.push({
+        kind: 'concentrated',
+        kind_label: 'Concentrated category',
+        rank: r.rank,
+        slug: r.slug,
+        name: r.name,
+        category: r.category,
+        implied_value_usd: r.implied_value_usd,
+        reason: `${category} holds ${categoryShare}% of the board's implied value, so this protocol's launch rides one category's fortunes.`,
+      });
+    }
+    if (r.rank > ALERT_LARGE_TOP_RANK && r.implied_value_usd >= ALERT_LARGE_MIN_IMPLIED_USD) {
+      largeUnranked += 1;
+      alerts.push({
+        kind: 'large-unranked',
+        kind_label: 'Large outside top 20',
+        rank: r.rank,
+        slug: r.slug,
+        name: r.name,
+        category: r.category,
+        implied_value_usd: r.implied_value_usd,
+        reason: `Rank #${r.rank} with $${r.implied_value_usd.toLocaleString('en-US')} implied: a large protocol the board's headline rows do not show.`,
+      });
+    }
+  }
+  alerts.sort((a, b) => b.implied_value_usd - a.implied_value_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+  return { alerts, hot, concentrated, large_unranked: largeUnranked };
+}
+
+/** A compact data.js that also carries the TVL Tiers and the Watchlist Alerts panels. */
+export function dataScriptTiers(radar: RadarData, movers: MoversData, chains: ChainBreakdownData, categories: CategoryDiveData, risk: RiskData, tiers: TvlTiersData, alerts: WatchlistAlertsData): string {
+  return `window.RADAR=${JSON.stringify({ ...radar, movers, chains, categories, risk, tiers, alerts })};\n`;
+}

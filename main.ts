@@ -20,6 +20,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSyn
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { boardIssue, buildRadar, categoryDeepDive, chainBreakdown, dataScript, dataScriptExtended, dataScriptFull, parseSnapshot, riskConcentration, topMovers } from './lib/model.ts';
+import { dataScriptTiers, tvlTiers, watchlistAlerts } from './lib/model.ts';
 import { buildDossier } from './vendor/makefun-board.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -51,6 +52,8 @@ const movers = topMovers(board);
 const chains = chainBreakdown(board);
 const categories = categoryDeepDive(board);
 const risk = riskConcentration(board);
+const tiers = tvlTiers(board);
+const alerts = watchlistAlerts(board, categories);
 const issue = boardIssue(board, snapshot);
 if (issue !== null) {
   process.stderr.write(`token radar: the model wrote a board the gate refuses: ${issue}\n`);
@@ -66,6 +69,9 @@ writeFileSync(join(out, 'data.js'), dataScriptExtended(radar, movers, chains));
 // The dashboard's Category Deep Dive and Risk panels read the same board from data.js:
 // rewrite it once more with the category table and the concentration read merged in.
 writeFileSync(join(out, 'data.js'), dataScriptFull(radar, movers, chains, categories, risk));
+// The dashboard's TVL Tiers and Watchlist Alerts panels read the same board from data.js:
+// rewrite it once more with the tier table and the alert list merged in.
+writeFileSync(join(out, 'data.js'), dataScriptTiers(radar, movers, chains, categories, risk, tiers, alerts));
 
 /** Copy one directory's regular files into `to`, skipping names that start with a dot. */
 function copyFiles(from: string, to: string): string[] {
@@ -144,4 +150,17 @@ const hottestCategory = categories.hottest_category;
 process.stdout.write(
   `token radar: categories ${categories.categories.length} — top ${topCategory ? `${topCategory.category}: ${topCategory.protocols} protocols, $${topCategory.total_implied_value_usd.toLocaleString('en-US')} implied (${topCategory.share_pct}% of board)` : 'none'}; top 3 categories hold ${categories.top3_share_pct}%; hottest ${hottestCategory ?? 'none'}${categories.hottest_momentum_pct === null ? '' : ` ${categories.hottest_momentum_pct}%`}\n` +
     `token radar: risk HHI ${risk.hhi} (${risk.hhi_band}), top 10 hold ${risk.top10_share_pct}%, largest category ${risk.top_category} ${risk.top_category_share_pct}%, score ${risk.risk_score}/100 (${risk.risk_label})\n`,
+);
+
+// The TVL tiers and the watchlist alerts, for the console as well as the dashboard:
+// where the board's implied value sits by protocol size, and which protocols trip a watch
+// condition. The tier line names the largest and the densest tier; the alert line names the
+// biggest flag first, so the console reads the same order the panel shows.
+const tierLine = tiers.tiers.map((t) => `${t.label}: ${t.protocols} protocols, $${t.total_implied_value_usd.toLocaleString('en-US')} (${t.share_pct}%)`).join('; ');
+const topAlert = alerts.alerts[0];
+const hotNames = alerts.alerts.filter((a) => a.kind === 'hot').slice(0, 3).map((a) => a.name).join(', ');
+process.stdout.write(
+  `token radar: tiers ${tiers.tiers.length} — largest ${tiers.largest_tier} holds ${tiers.largest_tier_share_pct}% of implied value; densest ${tiers.densest_tier} with ${tiers.densest_tier_protocols} protocols\n` +
+    `token radar: tiers ${tierLine}\n` +
+    `token radar: alerts ${alerts.alerts.length} (${alerts.hot} hot, ${alerts.concentrated} concentrated-category, ${alerts.large_unranked} large outside top 20) — biggest flag ${topAlert ? `${topAlert.name} (${topAlert.kind_label}, $${topAlert.implied_value_usd.toLocaleString('en-US')} implied)` : 'none'}${hotNames.length > 0 ? `; hot: ${hotNames}` : ''}\n`,
 );

@@ -481,6 +481,7 @@
       shell.appendChild(chainPanel());
       shell.appendChild(categoryDivePanel());
       shell.appendChild(riskPanel());
+      shell.appendChild(tiersAlertsPanel());
       shell.appendChild(compsTable());
       shell.appendChild(modelPanel());
     }
@@ -686,6 +687,39 @@
       ),
       el('p', { class: 'risk-note', text: 'Risk score blends the HHI with the top-10 share and the largest category\'s share: below 30 reads diversified, below 55 reads watch, 55 and up reads concentrated. ' + risk.above_one_pct + ' protocols each carry at least 1% of the board\'s implied value.' })
     );
+  }
+
+  // TVL Tiers & Watchlist Alerts, from window.RADAR.tiers and window.RADAR.alerts: where the
+  // board's implied value sits by protocol size, and which protocols trip a watch condition.
+  function tiersAlertsPanel() {
+    var tiers = DATA.tiers || { tiers: [], largest_tier: '', largest_tier_share_pct: 0 };
+    var alerts = DATA.alerts || { alerts: [], hot: 0, concentrated: 0, large_unranked: 0 };
+    var facts = tiers.tiers.map(function (tier) {
+      return el('div', { class: 'fact' },
+        el('span', { text: tier.label + ' TVL' }),
+        el('b', { text: fmtUsd(tier.total_implied_value_usd) }),
+        el('span', { class: 'sub', text: tier.protocols + ' protocols · ' + tier.share_pct.toFixed(1) + '% of board' }),
+        el('span', { class: 'sub', text: 'avg multiple x' + tier.avg_multiple.toFixed(3) + ' · top ' + tier.top_protocol }));
+    });
+    var tbody = el('tbody');
+    alerts.alerts.forEach(function (a) {
+      tbody.appendChild(el('tr', null,
+        el('td', null, el('span', { class: 'alert-tag ' + a.kind, text: a.kind_label })),
+        el('td', null, el('b', { text: a.name }), el('span', { class: 'sub', text: ' #' + a.rank + ' · ' + fmtUsd(a.implied_value_usd) + ' implied' })),
+        el('td', { text: a.reason })));
+    });
+    return el('section', { class: 'panel' },
+      el('h2', { text: 'TVL tiers & watchlist alerts' }),
+      el('p', { class: 'sub', text: 'Four TVL tiers; the ' + tiers.largest_tier + ' tier holds the most implied value (' + tiers.largest_tier_share_pct.toFixed(1) + '%). Below it, ' + alerts.alerts.length + ' protocols trip a watch condition (' + alerts.hot + ' hot, ' + alerts.concentrated + ' concentrated-category, ' + alerts.large_unranked + ' large outside the top 20) — flags to check, not ranks.' }),
+      el('div', { class: 'facts' }, facts),
+      el('div', { class: 'table-wrap' },
+        el('table', null,
+          el('thead', null, el('tr', null,
+            el('th', { scope: 'col', text: 'Watch condition' }),
+            el('th', { scope: 'col', text: 'Protocol' }),
+            el('th', { scope: 'col', text: 'Why it is flagged' }))),
+          tbody)),
+      el('p', { class: 'tiers-note', text: 'Hot: clamped seven-day change at least +50% with at least $10M implied. Concentrated: its category holds at least 40% of the board. Large unranked: at least $50M implied outside the top 20.' }));
   }
 
   readHash();
